@@ -1,43 +1,60 @@
 pragma solidity ^0.6.8;
 pragma experimental ABIEncoderV2;
 
-// import "./erc20.sol";
-// import "./SafeMath.sol";
-// import "./Ownable.sol";
 
-/**
-* @title Staking Token (STK)
-* @author Alberto Cuesta Canada
-* @notice Implements a basic ERC20 staking token with incentive distribution.
-*/
-// contract StakingToken is ERC20, Ownable {
-contract Staking{
-//    using SafeMath for uint256;
+import "github.com/OpenZeppelin/openzeppelin-solidity/contracts/token/ERC20/ERC20.sol";
+import "github.com/OpenZeppelin/openzeppelin-solidity/contracts/math/SafeMath.sol";
+import "github.com/OpenZeppelin/openzeppelin-solidity/contracts/access/Ownable.sol";
 
-//    /**
-//     * @notice The constructor for the Staking Token.
-//     * @param _owner The address to receive all tokens on construction.
-//     * @param _supply The amount of tokens to mint on construction.
-//     */
-//    constructor(address _owner, uint256 _supply)
-//        public
-//    {
-//        _mint(_owner, _supply);
-//    }
-
-    address owner;
-    constructor() public{
-        owner = msg.sender;
+abstract contract StakingToken is ERC20, Ownable {
+    using SafeMath for uint256;
+    
+    
+    address public contract_owner;
+    uint supply = 1000000000;
+    constructor(address __owner) 
+        public
+    { 
+        contract_owner = msg.sender;
+        _mint(__owner, supply);
     }
+    
+    function burn(address reviewer, uint stakes) public{
+        _burn(reviewer, stakes);
+    }
+    
+    function return_owner() public returns(address){
+        return contract_owner;
+    }
+    
+    function reward(address person, uint reward_amount) public{
+        _mint(person, reward_amount);
+    }
+}
+    
+contract Staking{
 
+    StakingToken stakingToken = StakingToken(msg.sender);
+
+    uint internal reviewCount;
+    constructor() public{
+        reviewCount = 0;
+    }
+    
+    
+    
 struct Review{
         uint _id;
+        uint rest_id;
+        // string rest_namt;
         string text;
         uint rating;
         address reviewer;
+        uint128 reviewer_stakes;
         int votes;
+        uint128 stakes;
         mapping (address => int) validators;
-        address[] allValidators;
+        address payable[] allValidators;
         uint totalReviews;
         uint creationTime;
     }
@@ -49,87 +66,154 @@ struct PrintReview{
         string text;
         uint rating;
     }
+    
+// mapping (uint => Review[]) private allReviews;
+Review[] allReviews;
 
-Review[] private allReviews;
-
-function writeReview(uint _rating, string memory _text) public {
-    emptyReview.validators[msg.sender]=0;
-    address[] memory v;
-    allReviews.push(Review(allReviews.length+1, _text, _rating, msg.sender, 0, v, 0, now));
+function getID() internal returns(uint){
+    return ++reviewCount;
 }
 
-function getReview(uint index) public view returns(PrintReview memory){
-    PrintReview[20] memory reviews;
+function createAccount(address person) public{
+    stakingToken.reward(person, 50);
+}
+
+function writeReview(uint rest_id, uint _rating, string memory _text, uint128 _stakes, address reviewer) public {
+    
+    stakingToken.burn(reviewer, _stakes);
+    
+    emptyReview.validators[msg.sender]=0;
+    address payable[] memory v;
+    // allReviews.push(Review(allReviews.length+1, _text, _rating, msg.sender, int(_stakes), v, 0, now));
+    uint review_id = getID();
+    
+    // allReviews[review_id] = Review(review_id, _text, _rating, msg.sender, int(_stakes), v, 0, now);
+    allReviews.push(Review(review_id, rest_id, _text, _rating, reviewer, _stakes, int(_stakes), _stakes, v, 0, now));
+}
+
+function getReview(uint review_id) public view returns(PrintReview memory){
+    PrintReview memory showreview;
     for (uint i = 0; i < allReviews.length; i++) {
             Review memory review = allReviews[i];
-            reviews[i] = PrintReview(review._id, review.text, review.rating);
+            if(review._id==review_id){
+            showreview = PrintReview(review._id, review.text, review.rating);
+                return showreview;
+            }
         }
-    return reviews[index];
 }
 
-function getReviewsLength() public view returns(uint){
-    return allReviews.length;
+function getReviewIDs() public view returns(uint[] memory){
+    uint len = allReviews.length;
+    uint[] memory ids = new uint[](len);
+    for (uint i = 0; i < len; i++) {
+            Review memory review = allReviews[i];
+            ids[i] = review._id;
+        }
+    return ids;
 }
 
 
-function AddVote(uint review_id, address validator, int tokens) internal {
+function AddVote(uint review_id, address payable validator, int votes, uint128 stakes) internal {
     Review storage review = allReviews[review_id-1];
-    review.validators[validator] = tokens;
-    review.votes += tokens;
+    review.validators[validator] = votes;
+    review.votes += votes;
+    review.stakes += stakes;
     review.totalReviews+=1;
 }
 
 
-function Vote(uint review_id, address validator, bool up, uint128 tokens) public {
+function Vote(uint review_id, address payable validator, bool up, uint128 tokens) public {
     // require(validator.tokens >= tokens, "Insufficient balance");
-    int stakes = 0;
+    int votes = 0;
     if (up){
-        stakes+=tokens;
+        votes+=tokens;
     } 
     else{
-        stakes-=tokens;
+        votes-=tokens;
     }
-    AddVote(review_id, validator, stakes);
+    stakingToken.burn(validator, tokens);
+    AddVote(review_id, validator, votes, tokens);
 }
 
 modifier OwnerOnly{
-    (msg.sender != owner);
+    (address(msg.sender) != stakingToken.return_owner());
     _;
 }
 
-function giveReward(address person) internal{
-    // reward user
+function giveReward(address payable person, uint reward_amount) internal{
+    stakingToken.reward(person, reward_amount);
 }
 
 function Reward(uint review_id) OwnerOnly public{
     require(orderStatus(review_id), "Not yet");
     Review storage review = allReviews[review_id];
-    int total = review.votes;
+    uint total = review.stakes;
+    
+
 
     if (total>0){
-        giveReward(review.reviewer);
+        giveReward(payable(review.reviewer), total/2); // pay half to the reviewer
+        
+        total = total - total/2;
+        
+        uint positive_reviewers = 0;
+        
         for( uint i=0; i<review.allValidators.length; i++){
             if ( review.validators[review.allValidators[i]] > 0){
-                giveReward(review.allValidators[i]);
+                positive_reviewers++;
             }
+        }
+        
+        for( uint i=0; i<review.allValidators.length; i++){
+            if ( review.validators[review.allValidators[i]] > 0){
+                giveReward(review.allValidators[i], total/positive_reviewers);
+            }
+        }
+    }
+    
+    // if invalidated review
+    else if (total<0){
+        
+        uint negative_reviewers = 0;
+        
+        for( uint i=0; i<review.allValidators.length; i++){
+            if ( review.validators[review.allValidators[i]] < 0){
+                negative_reviewers++;
+            }
+        }
+        
+        for( uint i=0; i<review.allValidators.length; i++){
+            if ( review.validators[review.allValidators[i]] < 0){
+                giveReward(review.allValidators[i], total/negative_reviewers);
+            }
+        }
+    }
+    
+    else if (total==0){
+        
+        
+        for( uint i=0; i<review.allValidators.length; i++){
+            uint reward = 0;
+            
+            if (review.validators[review.allValidators[i]]<0){
+                reward = uint(-1*review.validators[review.allValidators[i]]);
+            }
+            else{
+                reward = uint(review.validators[review.allValidators[i]]);   
+            }
+            giveReward(review.allValidators[i], reward);
         }
     }
 }
 
-function orderStatus(uint review_id) public view returns (bool) {
+function orderStatus(uint review_id) internal view returns (bool) {
     Review memory review = allReviews[review_id-1];
-    if (now < review.creationTime + 2 days) {
+    if (now < review.creationTime + 5 seconds) {
         return false;
     } else {
         return true;
     }
 }
-
-
-
-
-
-
 
 }
 
